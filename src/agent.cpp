@@ -149,7 +149,7 @@ public:
         s += "- Computer: " + machine + ".\n";
         if (!cfg.machine_note.empty()) s += "- Note about this computer: " + cfg.machine_note + "\n";
         s += "- Local date/time: " + std::string(date) + "\n";
-        s += "- The bash tool runs Git Bash (" + (cfg.bash_path.empty() ? std::string("not found!") : cfg.bash_path) +
+        s += "- The bash tool runs Git Bash (" + (cfg.bash_off ? std::string("turned off") : cfg.bash_path.empty() ? std::string("not found!") : cfg.bash_path) +
              "). Both C:/path and /c/path forms work; quote paths with spaces.\n";
         s += "- Current working directory: " + cwd + " (bash `cd` persists between calls; relative file paths resolve here).\n";
         s += "- Data directory: " + cfg.data_dir + ".\n";

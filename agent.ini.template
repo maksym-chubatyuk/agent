@@ -1,4 +1,7 @@
-; agent configuration. Copy to agent.ini next to agent.exe (or pass --config FILE).
+; agent configuration. agent.exe reads the file given with --config FILE, else
+; %APPDATA%\agent\agent.ini, else agent.ini next to agent.exe. "agent.exe setup" asks for the main
+; values and writes %APPDATA%\agent\agent.ini, or the --config file; it also runs on the first start
+; when no config file exists.
 ; Format: [section] headers, "key = value" lines, ';' or '#' comments (also after a value when
 ; preceded by a space). Values may be wrapped in double quotes. Relative paths are resolved
 ; against the folder of this file. Any key can be overridden on the command line with
@@ -25,8 +28,8 @@ scrape_timeout_ms = 60000
 search_limit = 5
 
 [tools]
-bash =                                      ; path to Git Bash's bash.exe; empty = auto-detect (PATH, then
-                                            ; Program Files\Git, LocalAppData\Programs\Git)
+bash =                                      ; path to Git Bash's bash.exe; none = no bash; empty = auto-detect
+                                            ; (PATH, Program Files\Git, LocalAppData\Programs\Git, \PortableGit)
 workdir =                                   ; initial working directory (default: <data_dir>\work)
 path_extra =                                ; prepended to the (deliberately short) child PATH
 spill_threshold = 16000                     ; bytes; longer bash output / pages are saved to a file

@@ -8,6 +8,9 @@ namespace ag {
 // Find bash.exe: PATH first, then common Git for Windows folders. "" if not found.
 std::string detect_bash();
 
+// %APPDATA%\agent ("" if APPDATA is not set): holds the per-user agent.ini and data\.
+std::string user_config_dir();
+
 struct Config {
     // [llm]
     // No setup-specific defaults: endpoint, model, Firecrawl and bash come only from the config file.
@@ -31,8 +34,9 @@ struct Config {
     int search_limit = 5;
 
     // [tools]
-    std::string bash_path;            // empty = auto-detect (PATH, then common Git for Windows folders)
+    std::string bash_path;            // empty = auto-detect (PATH, then common Git for Windows folders); "none" = no bash
     bool bash_autodetected = false;
+    bool bash_off = false;            // tools.bash = none
     std::string workdir;              // initial cwd for bash and relative paths (default: <data_dir>\work)
     std::string path_extra;           // prepended to the child PATH
     long spill_threshold = 16000;     // bytes; longer output is saved to a file

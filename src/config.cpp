@@ -100,7 +100,10 @@ void Config::finalize() {
     data_dir = to_backslashes(data_dir);
     while (data_dir.size() > 3 && data_dir.back() == '\\') data_dir.pop_back();
     if (workdir.empty()) workdir = path_join(data_dir, "work");
-    if (bash_path.empty()) {
+    if (lower(trim(bash_path)) == "none") {
+        bash_path.clear();
+        bash_off = true;
+    } else if (bash_path.empty()) {
         bash_path = detect_bash();
         bash_autodetected = !bash_path.empty();
     } else if (!path_is_absolute(bash_path)) {
@@ -162,7 +165,18 @@ std::string detect_bash() {
             std::string cand = path_join(r, sub);
             if (file_exists(cand)) return cand;
         }
+    // 3. PortableGit unpacked at the root of the system drive
+    std::string sd = env(L"SystemDrive");
+    if (!sd.empty()) {
+        std::string cand = sd + "\\PortableGit\\bin\\bash.exe";
+        if (file_exists(cand)) return cand;
+    }
     return "";
+}
+
+std::string user_config_dir() {
+    std::string a = env(L"APPDATA");
+    return a.empty() ? std::string() : path_join(a, "agent");
 }
 
 std::string Config::persona_path() const { return path_join(data_dir, persona_file); }

@@ -394,6 +394,7 @@ static ToolResult tool_bash(const Json& args, ToolContext& ctx) {
             }
         }
     }
+    if (cfg.bash_off) return fail("bash is turned off in the config ([tools] bash = none)");
     if (cfg.bash_path.empty()) return fail("no bash.exe configured ([tools] bash) and none found on PATH or in the usual Git for Windows folders");
     if (!file_exists(cfg.bash_path)) return fail("bash not found at " + cfg.bash_path + " (check [tools] bash in the config)");
 

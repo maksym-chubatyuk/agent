@@ -7,7 +7,7 @@ CXXFLAGS = -mcrtdll=msvcrt-os -include src/msvcrt_compat.h -D__USE_MINGW_ANSI_ST
 LDFLAGS  = -mcrtdll=msvcrt-os -static -static-libgcc -static-libstdc++ -s -Wl,--gc-sections
 LIBS     = -lws2_32 -lshell32 -ladvapi32
 
-SRC = src/json.cpp src/util.cpp src/regex_lite.cpp src/config.cpp src/http.cpp src/proc.cpp \
+SRC = src/json.cpp src/util.cpp src/regex_lite.cpp src/config.cpp src/http.cpp src/proc.cpp src/setup.cpp \
       src/session.cpp src/tools.cpp src/agent.cpp src/console.cpp src/ui.cpp src/main.cpp src/msvcrt_compat.cpp
 OBJ = $(SRC:src/%.cpp=build/%.o)
 EXE = build/agent.exe
@@ -24,7 +24,11 @@ $(EXE): $(OBJ)
 build:
 	mkdir -p build
 
+# Windows installer (NSIS 3): build/agent-setup.exe
+installer: $(EXE)
+	makensis -V2 installer/agent.nsi
+
 clean:
 	rm -rf build
 
-.PHONY: all clean
+.PHONY: all installer clean

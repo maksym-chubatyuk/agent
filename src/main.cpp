@@ -3,6 +3,7 @@
 // object, ASCII-escaped (\uXXXX) so the CP437 console can't mangle it.
 #include "agent.h"
 #include "console.h"
+#include "setup.h"
 #include "ui.h"
 #include "util.h"
 #include <shellapi.h>
@@ -97,7 +98,8 @@ static BOOL WINAPI ctrl_handler(DWORD type) {
 static void usage() {
     out_line(obj("usage").set("text",
         "agent [--config FILE] [--set section.key=value]... [--yolo] [COMMAND]\n"
-        "  (no command)                   interactive console UI\n"
+        "  (no command)                   interactive console UI (runs setup first if there is no config)\n"
+        "  setup                          ask for the main settings, write the config, then start the UI\n"
         "  run [--session ID|last] [--yolo] [--approve-stdin] [--cancel-after SEC] [--stats] [--brief] PROMPT|-\n"
         "  list\n"
         "  undo --session ID|last\n"
@@ -193,7 +195,8 @@ int main() {
     for (int i = 1; i < argc; i++) args.push_back(narrow(wargv[i]));
     LocalFree(wargv);
 
-    std::string config_path = path_join(exe_dir(), "agent.ini");
+    std::string config_path;
+    bool config_given = false;
     std::map<std::string, std::string> overrides;
     std::string command, session, prompt;
     bool yolo = false, approve_stdin = false, stats = false, have_prompt = false, brief = false;
@@ -206,7 +209,7 @@ int main() {
             return true;
         };
         std::string v;
-        if (a == "--config") { if (!next(config_path)) return 64; }
+        if (a == "--config") { if (!next(config_path)) return 64; config_given = true; }
         else if (a == "--set") {
             if (!next(v)) return 64;
             size_t eq = v.find('=');
@@ -226,7 +229,8 @@ int main() {
         else { prompt += " " + a; }
     }
     if (command == "version") { out_line(obj("version").set("version", kVersion)); return 0; }
-    bool ui = command.empty();
+    bool setup = command == "setup";
+    bool ui = command.empty() || setup;
     // Interactive mode reports a startup problem as one readable line and waits for a key, so a
     // double-clicked window doesn't vanish before it can be read.
     auto fatal = [&](const std::string& msg) {
@@ -247,14 +251,38 @@ int main() {
         }
     };
 
+    // Config lookup: --config FILE, else %APPDATA%\agent\agent.ini, else agent.ini next to the exe.
+    std::string user_ini = user_config_dir().empty() ? std::string() : path_join(user_config_dir(), "agent.ini");
+    if (!config_given) {
+        if (!user_ini.empty() && file_exists(user_ini)) config_path = user_ini;
+        else if (file_exists(path_join(exe_dir(), "agent.ini"))) config_path = path_join(exe_dir(), "agent.ini");
+    }
     Config cfg;
     std::string err;
-    if (!file_exists(config_path) && config_path != path_join(exe_dir(), "agent.ini")) {
+    if (config_given && !file_exists(config_path) && !setup) {
         log_error("config file not found: " + config_path);
         fatal("config file not found: " + config_path);
         return 64;
     }
-    if (!cfg.load(file_exists(config_path) ? config_path : std::string(), &err, &overrides)) {
+    // Setup: on "setup", or when the UI starts without any config file. It writes the --config file
+    // if one was given, else %APPDATA%\agent\agent.ini; the current values are the defaults.
+    if (setup || (ui && config_path.empty())) {
+        Config cur;
+        bool have = !config_path.empty() && file_exists(config_path);
+        if (have && !cur.load(config_path, &err)) {
+            log_error("config: " + err);
+            fatal(err);
+            return 64;
+        }
+        std::string target = config_given ? config_path : !user_ini.empty() ? user_ini : path_join(exe_dir(), "agent.ini");
+        if (!run_setup(have ? &cur : nullptr, target, &err)) {
+            log_error("setup: " + err);
+            fatal(err);
+            return 1;
+        }
+        config_path = target;
+    }
+    if (!cfg.load(config_path, &err, &overrides)) {
         log_error("config: " + err);
         fatal(err);
         return 64;
