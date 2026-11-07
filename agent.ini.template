@@ -18,6 +18,7 @@ chars_per_token = 3.5                       ; token estimate = bytes / chars_per
 stream_usage = true                         ; send stream_options.include_usage and calibrate estimates from usage
 max_tokens = 0                              ; 0 = don't send max_tokens
 temperature = -1                            ; < 0 = don't send temperature
+top_p = -1                                  ; < 0 = don't send top_p
 max_retries = 6                             ; retries on connection errors, 5xx/429 and broken streams
 connect_timeout = 10                        ; seconds
 idle_timeout = 600                          ; seconds without any byte before a request is abandoned

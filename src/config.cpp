@@ -68,6 +68,7 @@ bool Config::load(const std::string& path, std::string* err, const std::map<std:
     B("llm.stream_usage", stream_usage);
     L("llm.max_tokens", max_tokens);
     D("llm.temperature", temperature);
+    D("llm.top_p", top_p);
     I("llm.max_retries", max_retries);
     I("llm.connect_timeout", connect_timeout_s);
     I("llm.idle_timeout", idle_timeout_s);

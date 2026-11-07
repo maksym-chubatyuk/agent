@@ -24,6 +24,7 @@ struct Config {
     bool stream_usage = true;         // ask for usage in the stream (stream_options.include_usage)
     long max_tokens = 0;              // 0 = don't send
     double temperature = -1;          // <0 = don't send
+    double top_p = -1;                // <0 = don't send
     int max_retries = 6;
     int connect_timeout_s = 10;
     int idle_timeout_s = 600;         // max silence on an open LLM connection
