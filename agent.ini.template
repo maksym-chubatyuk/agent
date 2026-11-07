@@ -1,0 +1,44 @@
+; agent configuration. Copy to agent.ini next to agent.exe (or pass --config FILE).
+; Format: [section] headers, "key = value" lines, ';' or '#' comments (also after a value when
+; preceded by a space). Values may be wrapped in double quotes. Relative paths are resolved
+; against the folder of this file. Any key can be overridden on the command line with
+; --set section.key=value.
+
+[llm]
+base_url = http://localhost:8080/v1         ; OpenAI-compatible endpoint (plain HTTP), required
+model = your-model                          ; model name sent in every request, required
+api_key =                                   ; optional; sent as "Authorization: Bearer <key>"
+context_length = 32768                      ; model context in tokens
+compress_threshold = 0.75                   ; compress history when the estimate exceeds this fraction
+keep_recent = 0.35                          ; fraction of context_length kept verbatim after compression
+chars_per_token = 3.5                       ; token estimate = bytes / chars_per_token until the server reports usage
+stream_usage = true                         ; send stream_options.include_usage and calibrate estimates from usage
+max_tokens = 0                              ; 0 = don't send max_tokens
+temperature = -1                            ; < 0 = don't send temperature
+max_retries = 6                             ; retries on connection errors, 5xx/429 and broken streams
+connect_timeout = 10                        ; seconds
+idle_timeout = 600                          ; seconds without any byte before a request is abandoned
+
+[firecrawl]
+url = http://localhost:3002                 ; self-hosted Firecrawl (no API key); empty = web tools disabled
+scrape_timeout_ms = 60000
+search_limit = 5
+
+[tools]
+bash =                                      ; path to Git Bash's bash.exe; empty = auto-detect (PATH, then
+                                            ; Program Files\Git, LocalAppData\Programs\Git)
+workdir =                                   ; initial working directory (default: <data_dir>\work)
+path_extra =                                ; prepended to the (deliberately short) child PATH
+spill_threshold = 16000                     ; bytes; longer bash output / pages are saved to a file
+spill_head = 4000                           ; bytes of the head returned with spilled output
+spill_tail = 1000                           ; bytes of the tail returned with spilled bash output
+read_limit = 500                            ; default number of lines for read_file
+read_max_bytes = 60000                      ; cap on one read_file result
+
+[agent]
+data_dir = data                             ; sessions, memory, persona, spill files, logs
+persona_file = persona.md                   ; relative to data_dir; loaded into the system prompt
+memory_file = MEMORY.md                     ; relative to data_dir; loaded every turn, agent-editable
+approval_patterns_file = approval_patterns.txt  ; relative to data_dir; extra risky-command regexes
+yolo = false                                ; true = run risky commands without asking
+machine_note =                              ; optional line about this computer for the system prompt
