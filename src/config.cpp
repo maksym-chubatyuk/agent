@@ -74,6 +74,7 @@ bool Config::load(const std::string& path, std::string* err, const std::map<std:
     S("firecrawl.url", firecrawl_url);
     I("firecrawl.scrape_timeout_ms", scrape_timeout_ms);
     I("firecrawl.search_limit", search_limit);
+    L("firecrawl.scrape_chars", scrape_chars);
     S("tools.bash", bash_path);
     S("tools.workdir", workdir);
     S("tools.path_extra", path_extra);
@@ -121,6 +122,7 @@ void Config::finalize() {
     if (spill_head < 200) spill_head = 200;
     if (spill_head > spill_threshold) spill_head = spill_threshold;
     if (spill_tail < 0) spill_tail = 0;
+    if (scrape_chars < 2000) scrape_chars = 2000;
     if (read_limit < 1) read_limit = 500;
     if (max_retries < 0) max_retries = 0;
 }

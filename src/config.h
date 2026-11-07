@@ -32,6 +32,7 @@ struct Config {
     std::string firecrawl_url;        // e.g. http://localhost:3002 (web tools fail with a clear error if unset)
     int scrape_timeout_ms = 60000;
     int search_limit = 5;
+    long scrape_chars = 15000;        // characters of a scraped page returned inline
 
     // [tools]
     std::string bash_path;            // empty = auto-detect (PATH, then common Git for Windows folders); "none" = no bash

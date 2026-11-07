@@ -30,16 +30,24 @@ Json tool_schemas() {
     Json tools = Json::array();
     {
         Json p = Json::object();
-        p.set("query", prop("string", "Search terms as plain words. Do not use quotes or search operators."));
-        p.set("limit", prop("integer", "Number of results (1-20, default 5)."));
-        tools.push_back(fn("web_search", "Search the web. Returns titles, URLs and snippets.", p, {"query"}));
+        p.set("query", prop("string", "The search query to look up on the web. You may include operators such as "
+                                      "site:example.com, filetype:pdf, intitle:word, -term, or \"exact phrase\"."));
+        p.set("limit", prop("integer", "Maximum number of results to return (1-20). Defaults to 5."));
+        tools.push_back(fn("web_search",
+                           "Search the web: returns titles, URLs and snippets (5 by default). Read pages with "
+                           "web_scrape. The query is passed through to the search backend, so operators such as "
+                           "site:domain, filetype:pdf, intitle:word, -term, and \"exact phrase\" work.",
+                           p, {"query"}));
     }
     {
         Json p = Json::object();
-        p.set("url", prop("string", "The http(s) URL to fetch."));
+        p.set("url", prop("string", "The http(s) URL of the page to read."));
         tools.push_back(fn("web_scrape",
-                           "Fetch a web page as markdown. The full page is saved to a file; you get the beginning "
-                           "plus the file path (use read_file or grep via bash for the rest).",
+                           "Extract the content of a web page as markdown (no summarization). Also works with PDF "
+                           "URLs. Pages within the character budget return whole; larger pages return a head+tail "
+                           "window with a footer giving the full text's saved file path, so you can page through "
+                           "the omitted middle with read_file or grep it via bash. Images appear as [IMAGE: alt] "
+                           "placeholders; links are kept.",
                            p, {"url"}));
     }
     {
@@ -142,28 +150,87 @@ std::string check_risky(const std::string& command, const std::vector<Regex>& pa
 }
 
 std::string clean_search_query(const std::string& q) {
-    std::string s = q;
-    const char* quotes[] = {"\"", "\xE2\x80\x9C", "\xE2\x80\x9D", "\xE2\x80\x9E", "\xC2\xAB", "\xC2\xBB", "`", "\xE2\x80\x98", "\xE2\x80\x99"};
-    for (auto qq : quotes) s = replace_all(s, qq, " ");
-    // single quotes used as phrase quotes ('foo bar'): drop those at word edges, keep apostrophes (don't)
-    std::string t;
-    for (size_t i = 0; i < s.size(); i++) {
-        if (s[i] == '\'') {
-            bool prev_alnum = i > 0 && isalnum((unsigned char)s[i - 1]);
-            bool next_alnum = i + 1 < s.size() && isalnum((unsigned char)s[i + 1]);
-            if (!(prev_alnum && next_alnum)) { t += ' '; continue; }
-        }
-        t += s[i];
-    }
+    // Operators and quoted phrases are passed through to the search backend; only whitespace is tidied.
     std::string out;
     bool sp = false;
-    for (char c : t) {
+    for (char c : q) {
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { sp = true; continue; }
         if (sp && !out.empty()) out += ' ';
         sp = false;
         out += c;
     }
     return out;
+}
+
+// Markdown cleanup for scraped pages: images become [IMAGE: alt] placeholders (dropped when they have no
+// alt text), links whose text was only an image are dropped, trailing spaces go and runs of blank lines
+// collapse to one.
+static size_t md_close(const std::string& s, size_t open, char oc, char cc) {
+    int depth = 0;
+    for (size_t i = open; i < s.size(); i++) {
+        if (s[i] == oc) depth++;
+        else if (s[i] == cc && --depth == 0) return i;
+        else if (s[i] == '\n' && oc == '[' && i + 1 < s.size() && s[i + 1] == '\n') return std::string::npos;
+    }
+    return std::string::npos;
+}
+
+static std::string md_strip_images(const std::string& s) {
+    std::string out;
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] == '!' && i + 1 < s.size() && s[i + 1] == '[') {
+            size_t rb = md_close(s, i + 1, '[', ']');
+            if (rb != std::string::npos && rb + 1 < s.size() && s[rb + 1] == '(') {
+                size_t rp = md_close(s, rb + 1, '(', ')');
+                if (rp != std::string::npos) {
+                    std::string alt = trim(replace_all(s.substr(i + 2, rb - i - 2), "\n", " "));
+                    if (!alt.empty()) out += "[IMAGE: " + alt + "]";
+                    i = rp + 1;
+                    continue;
+                }
+            }
+        }
+        out += s[i++];
+    }
+    return out;
+}
+
+static std::string md_drop_empty_links(const std::string& s) {
+    std::string out;
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] == '[' && (i == 0 || s[i - 1] != '!')) {
+            size_t rb = md_close(s, i, '[', ']');
+            if (rb != std::string::npos && rb + 1 < s.size() && s[rb + 1] == '(' && trim(s.substr(i + 1, rb - i - 1)).empty()) {
+                size_t rp = md_close(s, rb + 1, '(', ')');
+                if (rp != std::string::npos) { i = rp + 1; continue; }
+            }
+        }
+        out += s[i++];
+    }
+    return out;
+}
+
+static std::string clean_scraped_markdown(const std::string& md) {
+    std::string s = md_drop_empty_links(md_strip_images(replace_all(md, "\r\n", "\n")));
+    std::string out;
+    int blank = 0;
+    size_t pos = 0;
+    while (pos <= s.size()) {
+        size_t nl = s.find('\n', pos);
+        if (nl == std::string::npos) nl = s.size();
+        std::string line = s.substr(pos, nl - pos);
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) line.pop_back();
+        if (trim(line).empty()) {
+            if (++blank == 1 && !out.empty()) out += "\n";
+        } else {
+            blank = 0;
+            out += line + "\n";
+        }
+        pos = nl + 1;
+    }
+    return trim(out) + "\n";
 }
 
 // ---------------------------------------------------------------- helpers
@@ -280,7 +347,15 @@ static ToolResult tool_web_scrape(const Json& args, ToolContext& ctx) {
     Json body = Json::object();
     Json formats = Json::array();
     formats.push_back("markdown");
-    body.set("url", url).set("formats", formats).set("timeout", cfg.scrape_timeout_ms);
+    // Firecrawl's onlyMainContent mode deletes elements whose class names look like page chrome (".widget",
+    // ".top", ".side", ...), which on many sites includes the article itself. Ask for the whole page and
+    // remove only the standard page-chrome elements instead.
+    Json exclude = Json::array();
+    for (const char* t : {"nav", "header", "footer", "aside", "[role=navigation]", "[role=banner]",
+                          "[role=contentinfo]", "[role=complementary]"})
+        exclude.push_back(t);
+    body.set("url", url).set("formats", formats).set("onlyMainContent", false).set("excludeTags", exclude)
+        .set("timeout", cfg.scrape_timeout_ms);
     HttpResult res;
     Json out;
     std::string err;
@@ -291,23 +366,26 @@ static ToolResult tool_web_scrape(const Json& args, ToolContext& ctx) {
         return r;
     }
     const Json& data = out["data"];
-    std::string md = data.get_str("markdown");
+    std::string raw = data.get_str("markdown");
+    std::string md = clean_scraped_markdown(raw);
     std::string title = data["metadata"].get_str("title");
     long long code = data["metadata"].get_int("statusCode", 0);
     std::string file = new_spill_path(ctx, "scrape", ".md");
     std::string header = "<!-- source: " + url + (title.empty() ? "" : " | title: " + title) + " -->\n";
-    bool saved = write_file(file, header + md);
+    bool saved = write_file(file, header + raw);
     ToolResult r;
     r.output_file = saved ? file : "";
     std::string info = "URL: " + url + "\n" + (title.empty() ? "" : "Title: " + title + "\n") +
                        (code ? "HTTP status: " + std::to_string(code) + "\n" : "") + "Length: " + std::to_string(md.size()) +
                        " bytes, " + std::to_string(count_occurrences(md, "\n") + 1) + " lines\n" +
-                       (saved ? "Full page saved to: " + file + "\n" : "(could not save the page to a file)\n");
-    if ((long)md.size() <= cfg.spill_threshold) {
+                       (saved ? "Full page (raw markdown) saved to: " + file + "\n" : "(could not save the page to a file)\n");
+    if ((long)md.size() <= cfg.scrape_chars) {
         r.content = info + "\n" + md;
     } else {
-        r.content = info + "\n--- first " + std::to_string(cfg.spill_head) + " bytes ---\n" + utf8_head(md, cfg.spill_head) +
-                    "\n--- (truncated; use read_file with offset/limit, or grep via bash, on the file above) ---\n";
+        size_t tail_n = (size_t)cfg.scrape_chars / 5, head_n = (size_t)cfg.scrape_chars - tail_n;
+        r.content = info + "\n" + utf8_head(md, head_n) + "\n\n[... " + std::to_string(md.size() - head_n - tail_n) +
+                    " characters omitted. The full page is in the file above: read it with read_file (offset/limit) "
+                    "or search it with grep via bash ...]\n\n" + utf8_tail(md, tail_n);
     }
     r.summary = (title.empty() ? url : title) + " (" + std::to_string(md.size()) + " bytes)";
     return r;

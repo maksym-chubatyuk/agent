@@ -1,6 +1,7 @@
 ; agent installer (NSIS 3, Modern UI 2). Build: make installer -> build/agent-setup.exe
 ; Pages: directory, install, finish (Run agent / Desktop shortcut). Silent install: agent-setup.exe /S
-; Uninstall: Add/Remove Programs, or "$INSTDIR\uninstall.exe" (asks whether to delete %APPDATA%\agent).
+; Uninstall: Add/Remove Programs, or "$INSTDIR\uninstall.exe". Removes everything: program files, shortcuts,
+; the Add/Remove Programs entry and the user's %APPDATA%\agent (settings, sessions, memory).
 
 Unicode true
 Target x86-unicode            ; 32-bit: the installer must run on Windows XP
@@ -68,20 +69,25 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
+  ; agent.exe can't be removed while it runs: ask the user to close it first.
+retry:
+  ClearErrors
+  Delete "$INSTDIR\agent.exe"
+  IfErrors 0 removed
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Agent is still running. Close it, then click Retry." /SD IDCANCEL IDRETRY retry
+  Abort "Agent is still running."
+removed:
   Delete "$SMPROGRAMS\Agent.lnk"
   Delete "$DESKTOP\Agent.lnk"
-  Delete "$INSTDIR\agent.exe"
   Delete "$INSTDIR\agent.ini.template"
+  Delete "$INSTDIR\agent.ini"
   Delete "$INSTDIR\agent-error.log"
+  RMDir /r "$INSTDIR\data"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
   DeleteRegKey HKLM "${UNINST_KEY}"
 
-  ; Settings, sessions and memory live in the user's %APPDATA%\agent. Silent uninstall keeps them.
+  ; Settings, sessions, memory and scratch files live in the user's %APPDATA%\agent.
   SetShellVarContext current
-  IfFileExists "$APPDATA\agent\*.*" 0 done
-  MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
-    "Also delete your agent settings, sessions and memory?$\r$\n$\r$\n$APPDATA\agent" /SD IDNO IDNO done
   RMDir /r "$APPDATA\agent"
-done:
 SectionEnd

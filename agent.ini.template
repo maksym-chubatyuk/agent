@@ -26,6 +26,7 @@ idle_timeout = 600                          ; seconds without any byte before a 
 url = http://localhost:3002                 ; self-hosted Firecrawl (no API key); empty = web tools disabled
 scrape_timeout_ms = 60000
 search_limit = 5
+scrape_chars = 15000                        ; characters of a scraped page sent to the model (longer pages: head + tail, full text saved to a file)
 
 [tools]
 bash =                                      ; path to Git Bash's bash.exe; none = no bash; empty = auto-detect
