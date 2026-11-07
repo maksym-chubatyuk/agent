@@ -11,80 +11,37 @@ namespace ag {
 
 namespace {
 
+// Default identity when there is no persona file. First sentence after opencode's system prompt; the rest is
+// Hermes Agent's DEFAULT_AGENT_IDENTITY (agent/prompt_builder.py) without its product name.
 const char* kDefaultPersona =
-    "You are a capable and careful assistant agent running on a Windows computer.\n"
-    "You get things done with your tools: web search, fetching pages, bash commands and file editing.\n"
-    "Work step by step, check results, and keep answers concise. The machine may be old and slow:\n"
-    "prefer light commands and avoid huge outputs.\n";
+    "You are a helpful assistant. Help the user accomplish their goals using the tools you have available.\n"
+    "Be direct: match the length of your reply to the weight of the ask - a one-line question gets a one-line "
+    "answer, and finished work gets a short report of what changed, what's verified, and what's left, never a "
+    "replay of the process. No filler (\"Great question,\" \"I'd be happy to\"), no restating the request back, no "
+    "re-summarizing what you already said, no narrating tool calls the user can see. Plain claims over adjectives; "
+    "when unsure, say so plainly. Agree because it's right, not because the user said it. Depth is earned - give "
+    "it when the user asks for detail, teaches, or the stakes demand it, not by default.\n";
 
 const char* kDefaultMemory = "# Agent memory\n\n";
 
-// Tool-use guidance for the system prompt. Taken from Hermes Agent's agent/prompt_builder.py
-// (PARALLEL_TOOL_CALL_GUIDANCE and OPENAI_MODEL_EXECUTION_GUIDANCE, which Hermes applies to all model
-// families), with tool names mapped to this agent's tools and lines about tools it
-// doesn't have removed.
-const char* kToolGuidance =
-    "# Parallel tool calls\n"
-    "When you need several pieces of information that don't depend on each other, request them together in a "
-    "single response instead of one tool call per turn. Independent reads, searches, web fetches, and "
-    "read-only commands should be batched into the same assistant turn - batching avoids resending the whole "
-    "conversation on every extra round-trip.\n"
-    "Only serialize calls when a later call genuinely depends on an earlier call's result (e.g. you must "
-    "read a file before you can patch it). When in doubt and the calls are independent, batch them.\n"
-    "\n"
-    "# Execution discipline\n"
-    "<tool_persistence>\n"
-    "- Use tools whenever they improve correctness, completeness, or grounding.\n"
-    "- Do not stop early when another tool call would materially improve the result.\n"
+// Tool rules for the system prompt, one bullet each, taken from opencode (session/system-prompt.ts, gpt.txt),
+// pi (core/system-prompt.ts) and Hermes Agent (agent/prompt_builder.py), with tool names mapped to this
+// agent's tools.
+const char* kToolRules =
+    "# Tools\n"
+    "- Prefer parallelizing independent tool calls.\n"
+    "- Prefer dedicated tools over shell commands; fall back to the shell when a tool cannot do what you need.\n"
+    "- Use write_file to create files or completely replace their content. Prefer edit_file for targeted changes.\n"
+    "- Use bash for file operations like ls, grep, find.\n"
+    "- Current facts (weather, news, versions, prices) -> search with web_search, then read the most relevant "
+    "pages with web_scrape.\n"
     "- If a tool returns empty, partial, or suspiciously narrow results, retry with a broader or different query or "
     "strategy before concluding.\n"
-    "- Keep calling tools until: (1) the task is complete, AND (2) you have verified the result.\n"
-    "</tool_persistence>\n\n"
-    "<mandatory_tool_use>\n"
-    "NEVER answer these from memory or mental computation - ALWAYS use a tool:\n"
-    "- Arithmetic, math, calculations -> use bash\n"
-    "- Hashes, encodings, checksums -> use bash (e.g. sha256sum, base64)\n"
-    "- Current time, date, timezone -> use bash (e.g. date)\n"
-    "- System state: OS, CPU, memory, disk, ports, processes -> use bash\n"
-    "- File contents, sizes, line counts -> use read_file or bash\n"
-    "- Current facts (weather, news, versions) -> use web_search and web_scrape\n"
-    "Your memory describes the USER, not the system you are running on. The execution environment may "
-    "differ from what the memory says about their personal setup.\n"
-    "</mandatory_tool_use>\n\n"
-    "<act_dont_ask>\n"
-    "When a question has an obvious default interpretation, act on it immediately instead of asking for clarification. "
-    "Examples:\n"
-    "- 'Is port 443 open?' -> check THIS machine (don't ask 'open where?')\n"
-    "- 'What OS am I running?' -> check the live system (don't use memory)\n"
-    "- 'What time is it?' -> run `date` (don't guess)\n"
-    "Only ask for clarification when the ambiguity genuinely changes what tool you would call.\n"
-    "</act_dont_ask>\n\n"
-    "<prerequisite_checks>\n"
-    "- Before taking an action, check whether prerequisite discovery, lookup, or context-gathering steps are needed.\n"
-    "- Do not skip prerequisite steps just because the final action seems obvious.\n"
-    "- If a task depends on output from a prior step, resolve that dependency first.\n"
-    "</prerequisite_checks>\n\n"
-    "<verification>\n"
-    "Before finalizing your response:\n"
-    "- Correctness: does the output satisfy every stated requirement?\n"
-    "- Grounding: are factual claims backed by tool outputs or provided context?\n"
-    "- Formatting: does the output match the requested format or schema?\n"
-    "- Safety: if the next step has side effects (file writes, commands), confirm scope before executing.\n"
-    "- Completion: 'done' means every named acceptance criterion is verified - never a plausible subset. Completing "
-    "your plan is not itself the answer; the requested output must appear in your response.\n"
-    "</verification>\n\n"
-    "<literal_preservation>\n"
-    "- Preserve identifiers, commands, and values exactly as given - never 'repair' or normalize a token that fails a "
-    "stated format. A successful lookup does not validate a malformed source token; validate format first, then look "
-    "up.\n"
-    "</literal_preservation>\n\n"
-    "<missing_context>\n"
-    "- If required context is missing, do NOT guess or hallucinate an answer.\n"
-    "- Use the appropriate lookup tool when missing information is retrievable (read_file, bash, web_search, "
-    "web_scrape).\n"
-    "- Ask a clarifying question only when the information cannot be retrieved by tools.\n"
-    "- If you must proceed with incomplete information, label assumptions explicitly.\n"
-    "</missing_context>\n";
+    "- If required context is missing, do NOT guess or hallucinate an answer. Use a tool when the information is "
+    "retrievable; ask a clarifying question only when it cannot be retrieved.\n"
+    "- Show file paths clearly when working with files.\n"
+    "- Never run destructive commands such as recursive deletes on broad paths unless the user clearly asked for "
+    "that operation; if the target or scope is unclear, ask first.\n";
 
 struct ToolCallAcc {
     std::string id, name, args;
@@ -105,25 +62,20 @@ std::string machine_line() {
     ZeroMemory(&vi, sizeof vi);
     vi.dwOSVersionInfoSize = sizeof vi;
     GetVersionExW((OSVERSIONINFOW*)&vi);
-    SYSTEM_INFO si;
-    GetSystemInfo(&si);
-    MEMORYSTATUS ms;
-    ms.dwLength = sizeof ms;
-    GlobalMemoryStatus(&ms);
-    std::string cpu;
-    HKEY k;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0, KEY_READ, &k) == ERROR_SUCCESS) {
-        wchar_t buf[256];
-        DWORD sz = sizeof buf, type = 0;
-        if (RegQueryValueExW(k, L"ProcessorNameString", nullptr, &type, (BYTE*)buf, &sz) == ERROR_SUCCESS && type == REG_SZ)
-            cpu = trim(narrow(std::wstring(buf, wcsnlen(buf, sz / sizeof(wchar_t)))));
-        RegCloseKey(k);
-    }
-    char line[512];
-    snprintf(line, sizeof line, "Windows NT %lu.%lu build %lu%s%s, %lu logical CPU(s)%s%s, %lu MB RAM, ANSI code page %u, OEM code page %u",
-             vi.dwMajorVersion, vi.dwMinorVersion, vi.dwBuildNumber, vi.szCSDVersion[0] ? " " : "",
-             narrow(vi.szCSDVersion).c_str(), si.dwNumberOfProcessors, cpu.empty() ? "" : ", ", cpu.c_str(),
-             (unsigned long)(ms.dwTotalPhys / (1024 * 1024)), GetACP(), GetOEMCP());
+    unsigned ver = vi.dwMajorVersion * 10 + vi.dwMinorVersion;
+    bool server = vi.wProductType != VER_NT_WORKSTATION;
+    const char* name = ver == 50 ? "Windows 2000"
+                     : ver == 51 ? "Windows XP"
+                     : ver == 52 ? (server ? "Windows Server 2003" : "Windows XP x64")
+                     : ver == 60 ? (server ? "Windows Server 2008" : "Windows Vista")
+                     : ver == 61 ? (server ? "Windows Server 2008 R2" : "Windows 7")
+                     : ver == 62 ? "Windows 8"
+                     : ver == 63 ? "Windows 8.1"
+                     : ver >= 100 ? "Windows 10 or later"
+                     : "Windows";
+    char line[256];
+    snprintf(line, sizeof line, "%s (NT %lu.%lu%s%s)", name, vi.dwMajorVersion, vi.dwMinorVersion,
+             vi.szCSDVersion[0] ? ", " : "", narrow(vi.szCSDVersion).c_str());
     return line;
 }
 
@@ -208,32 +160,36 @@ public:
         SYSTEMTIME st;
         GetLocalTime(&st);
         char date[64];
-        snprintf(date, sizeof date, "%04u-%02u-%02u %02u:%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+        // Date only: a system prompt that changes every minute defeats the server's prompt cache.
+        snprintf(date, sizeof date, "%04u-%02u-%02u", st.wYear, st.wMonth, st.wDay);
         std::string cwd = sess.cwd.empty() ? cfg.workdir : sess.cwd;
         std::string mem_slash = to_slashes(cfg.memory_path());
         std::string s = trim(persona) + "\n\n";
         s += "# Environment\n";
-        s += "- Computer: " + machine + ".\n";
-        if (!cfg.machine_note.empty()) s += "- Note about this computer: " + cfg.machine_note + "\n";
-        s += "- Local date/time: " + std::string(date) + "\n";
-        s += "- The bash tool runs Git Bash (" + (cfg.bash_off ? std::string("turned off") : cfg.bash_path.empty() ? std::string("not found!") : cfg.bash_path) +
-             "). Both C:/path and /c/path forms work; quote paths with spaces.\n";
-        s += "- Current working directory: " + cwd + " (bash `cd` persists between calls; relative file paths resolve here).\n";
-        s += "- Data directory: " + cfg.data_dir + ".\n";
-        s += "- Scratchpad for this conversation: " + scratch + " (bash: $AGENT_SCRATCH). Put temporary files there. "
-             "Long tool output and scraped pages are saved there too. It is deleted when the conversation ends.\n";
-        s += "- Background processes you start in bash (cmd &) keep running for the rest of this conversation (their "
-             "output goes to a log file in the scratchpad) and are killed when the conversation ends.\n";
-        s += "- Commands have no timeout and stdin is empty: never run interactive programs or servers in the foreground.\n";
-        s += "- The user can undo a turn: that removes it from the conversation history only; files stay as they are.\n";
-        s += "- Some commands (deleting recursively, registry edits, shutdown, writing to system folders...) need the user's approval.\n\n";
-        s += std::string(kToolGuidance) + "\n";
-        s += "# Persistent memory\n";
-        s += "Your persistent memory file is " + cfg.memory_path() + " (bash: \"" + mem_slash + "\", also $AGENT_MEMORY).\n";
-        s += "It is loaded into this prompt at the start of every turn and survives across sessions. When you learn something "
-             "worth remembering (user preferences, facts about this machine, lessons learned), append to or edit this file "
-             "yourself, e.g. with bash: echo \"- fact\" >> \"" + mem_slash + "\" (or edit_file). Keep it short and factual.\n";
-        s += "Current memory file contents:\n<memory>\n" + memory + (memory.empty() || memory.back() == '\n' ? "" : "\n") + "</memory>\n";
+        s += "Host: " + machine + "\n";
+        if (!cfg.machine_note.empty()) s += "Note: " + cfg.machine_note + "\n";
+        s += "Current date: " + std::string(date) + "\n";
+        s += "Current working directory: " + cwd + "\n";
+        s += "Scratch directory: " + scratch + " ($AGENT_SCRATCH; write temporary files there; it is deleted when "
+             "this conversation ends)\n";
+        if (cfg.bash_off || cfg.bash_path.empty())
+            s += "Shell: no bash is available, so the bash tool will fail.\n";
+        else
+            s += "Shell: your bash tool runs commands through bash (git-bash / MSYS), NOT PowerShell or cmd.exe. Use POSIX "
+                 "shell syntax (`ls`, `$HOME`, `&&`, `|`, single-quoted strings). MSYS-style paths like /c/Users/... work "
+                 "alongside native C:\\Users\\... paths; quote paths that contain spaces. Commands have no timeout and "
+                 "no input: never run interactive programs or servers in the foreground (start them in the background "
+                 "with &; they are stopped when the conversation ends).\n";
+        s += "\n" + std::string(kToolRules) + "\n";
+        s += "# Memory\n";
+        s += "You have persistent memory, carried across sessions and loaded into each new session's context: the file " +
+             cfg.memory_path() + " (bash: \"" + mem_slash + "\", or $AGENT_MEMORY); change it with edit_file or bash. "
+             "It is for facts that apply to EVERY session regardless of task (who the user is, environment facts, "
+             "standing conventions); keep it short, and when it grows, replace or consolidate stale entries. Write "
+             "entries as declarative facts, not instructions to yourself: 'User prefers concise responses' is right, "
+             "'Always respond concisely' is wrong (imperative phrasing gets re-read as a directive in later sessions "
+             "and can override the user's current request). A fact stale within a week does not belong there.\n";
+        s += "<memory>\n" + memory + (memory.empty() || memory.back() == '\n' ? "" : "\n") + "</memory>\n";
         return s;
     }
 
@@ -250,6 +206,11 @@ public:
             const Json& content = m["content"];
             c.set("content", content.is_null() ? Json("") : content);
             if (m["tool_calls"].is_array() && m["tool_calls"].size()) c.set("tool_calls", m["tool_calls"]);
+            // Reasoning models (DeepSeek thinking mode and others served with reasoning_content) expect the
+            // reasoning of earlier assistant messages back in tool-enabled requests, so the model can continue
+            // its own reasoning between tool calls. Only messages that actually carried reasoning send it.
+            if (role == "assistant" && !m.get_str("reasoning_content").empty())
+                c.set("reasoning_content", m["reasoning_content"]);
             if (role == "tool") {
                 c.set("tool_call_id", m.get_str("tool_call_id"));
                 if (m.has("name")) c.set("name", m["name"]);

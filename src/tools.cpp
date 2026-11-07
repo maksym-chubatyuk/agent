@@ -54,11 +54,14 @@ Json tool_schemas() {
         Json p = Json::object();
         p.set("command", prop("string", "The bash command(s) to run."));
         tools.push_back(fn("bash",
-                           "Run a command in Git Bash (bash 4.3) on Windows XP. Returns the exit code and combined "
-                           "stdout/stderr. No timeout: avoid commands that wait for input or run forever. stdin is "
-                           "empty. The working directory persists between calls. Long output is saved to a file and "
-                           "you get its head, tail and path. Use this for listing directories, grep, find, git, and "
-                           "editing your memory file.",
+                           // Bullets after the persistent-bash description in DeepSeek Harness's minimal preset.
+                           "Run commands in a bash shell. Returns the exit code and combined stdout/stderr.\n"
+                           "* The working directory is kept across command calls.\n"
+                           "* Commands have no timeout and stdin is empty: avoid commands that wait for input.\n"
+                           "* Please avoid commands that may produce a very large amount of output; long output is "
+                           "saved to a file and you get its head, tail and path.\n"
+                           "* Please run long lived commands in the background, e.g. 'sleep 10 &' or start a server "
+                           "in the background.",
                            p, {"command"}));
     }
     {
