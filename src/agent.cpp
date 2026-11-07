@@ -57,6 +57,19 @@ struct LlmReply {
 enum LlmStatus { LLM_OK, LLM_CANCELLED, LLM_ERROR, LLM_CONTEXT };
 
 // One line describing this computer, detected at runtime (XP-era APIs only).
+// reasoning_effort: servers differ in the values they accept (OpenAI: low/medium/high/xhigh, DeepSeek: low/high/max,
+// vLLM: none..max, llama.cpp: strings passed to the chat template, some servers also take 1..100) and in whether a
+// number may be sent as a JSON number or a string. A value the server rejects fails the whole request, so the
+// agent adapts: see Agent::effort_fallback.
+const char* kEffortWords[] = {"none", "minimal", "low", "medium", "high", "xhigh", "max"};
+// Position of each word on a 0..100 scale (DeepSeek's low/medium/high/max = 50/62/75/100, the rest in between).
+int effort_scale(const std::string& w) {
+    static const int v[] = {0, 25, 50, 62, 75, 88, 100};
+    for (int i = 0; i < 7; i++) if (w == kEffortWords[i]) return v[i];
+    return -1;
+}
+bool all_digits(const std::string& s) { return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos; }
+
 std::string machine_line() {
     OSVERSIONINFOEXW vi;
     ZeroMemory(&vi, sizeof vi);
@@ -122,6 +135,9 @@ public:
     HANDLE scratch_lock = INVALID_HANDLE_VALUE;
     BackgroundSet bg;
     std::string machine;            // detected once at start
+    Json effort_value;              // what is sent as reasoning_effort (null = nothing); adapted on rejection
+    bool effort_ready = false;
+    std::vector<std::string> effort_tried;  // forms already rejected by the server
     double tokens_per_byte = 0;     // measured from the server's usage reports (0 = unknown)
     long long last_prompt_tokens = 0;
     unsigned call_counter = 0;
@@ -220,6 +236,72 @@ public:
         return out;
     }
 
+    // The server rejected effort_value. Pick the next form to try: a value the error message lists as allowed
+    // (nearest to the configured effort), the same value as number <-> string, the nearest of low/medium/high,
+    // and finally nothing at all, so a turn never fails over the effort setting.
+    void effort_fallback(const std::string& error_body) {
+        effort_tried.push_back(effort_value.dump(false));
+        const std::string want_s = lower(trim(cfg.reasoning_effort));
+        int want = all_digits(want_s) ? atoi(want_s.c_str()) : effort_scale(want_s);
+        if (want < 0) want = 75;
+        auto tried = [&](const Json& j) {
+            std::string d = j.dump(false);
+            for (auto& t : effort_tried) if (t == d) return true;
+            return false;
+        };
+        auto nearest = [&](const std::vector<std::string>& words) -> std::string {
+            std::string best;
+            int bd = 1000;
+            for (auto& w : words) {
+                if (w == "none" && want > 0) continue;
+                if (tried(Json(w))) continue;
+                int d = abs(effort_scale(w) - want);
+                if (d < bd || (d == bd && effort_scale(w) > effort_scale(best))) { bd = d; best = w; }
+            }
+            return best;
+        };
+        // 1. values the error message lists (whole words only)
+        std::string lb = lower(error_body);
+        std::vector<std::string> listed;
+        for (const char* w : kEffortWords) {
+            size_t pos = 0;
+            std::string word = w;
+            while ((pos = lb.find(word, pos)) != std::string::npos) {
+                bool l = pos == 0 || !isalnum((unsigned char)lb[pos - 1]);
+                bool r = pos + word.size() >= lb.size() || !isalnum((unsigned char)lb[pos + word.size()]);
+                if (l && r) { listed.push_back(word); break; }
+                pos += word.size();
+            }
+        }
+        // a server that doesn't know the field at all: no value will help, stop sending it
+        bool field_unknown = false;
+        for (const char* k : {"unrecognized", "unknown parameter", "unknown field", "unknown argument", "extra inputs",
+                              "not permitted", "unsupported parameter", "does not support reasoning"})
+            if (lb.find(k) != std::string::npos) field_unknown = true;
+        if (listed.empty() && field_unknown) {
+            log_error("llm: the server doesn't accept reasoning_effort; sending requests without it. Server said: " +
+                      clip(error_body, 300));
+            effort_value = Json();
+            return;
+        }
+        std::string pick = nearest(listed);
+        // 2. the same value as the other JSON type
+        Json alt;
+        if (pick.empty()) {
+            if (effort_value.is_number()) alt = Json(std::to_string((long long)effort_value.as_int()));
+            else if (effort_value.is_string() && all_digits(effort_value.as_string()))
+                alt = Json((long long)atoll(effort_value.as_string().c_str()));
+            if (!alt.is_null() && tried(alt)) alt = Json();
+        }
+        // 3. nearest standard word
+        if (pick.empty() && alt.is_null()) pick = nearest({"low", "medium", "high"});
+        Json next = !pick.empty() ? Json(pick) : alt;
+        if (next.is_null())
+            log_error("llm: the server rejected reasoning_effort '" + cfg.reasoning_effort +
+                      "' in every form; sending requests without it. Server said: " + clip(error_body, 300));
+        effort_value = next;
+    }
+
     LlmStatus llm_call(const Json& messages, bool with_tools, bool stream_events, LlmReply& out) {
         Json body = Json::object();
         body.set("model", cfg.llm_model).set("messages", messages).set("stream", true);
@@ -227,13 +309,13 @@ public:
         if (cfg.max_tokens > 0) body.set("max_tokens", cfg.max_tokens);
         if (cfg.temperature >= 0) body.set("temperature", cfg.temperature);
         if (cfg.top_p >= 0) body.set("top_p", cfg.top_p);
-        if (!cfg.reasoning_effort.empty()) {
-            // a plain number goes out as a number, anything else as the string given
-            const std::string& e = cfg.reasoning_effort;
-            bool num = e.find_first_not_of("0123456789") == std::string::npos;
-            if (num) body.set("reasoning_effort", (long long)atoll(e.c_str()));
-            else body.set("reasoning_effort", e);
+        if (!effort_ready) {
+            effort_ready = true;
+            const std::string e = lower(trim(cfg.reasoning_effort));
+            if (all_digits(e)) effort_value = Json((long long)atoll(e.c_str()));
+            else if (!e.empty()) effort_value = Json(e);
         }
+        if (!effort_value.is_null()) body.set("reasoning_effort", effort_value);
         if (cfg.stream_usage) {
             Json so = Json::object();
             so.set("include_usage", true);
@@ -345,6 +427,15 @@ public:
                 std::string lb = lower(b);
                 last_error = "HTTP " + std::to_string(res.status) + ": " + b;
                 bool retryable = res.status == 408 || res.status == 429 || res.status >= 500;
+                if (res.status == 400 && !effort_value.is_null() &&
+                    (lb.find("reasoning") != std::string::npos || lb.find("effort") != std::string::npos)) {
+                    effort_fallback(b);
+                    if (effort_value.is_null()) body.remove("reasoning_effort");
+                    else body.set("reasoning_effort", effort_value);
+                    payload = body.dump(false);
+                    attempt--;
+                    continue;
+                }
                 if ((res.status == 400 || res.status == 413) &&
                     (lb.find("context") != std::string::npos || lb.find("too long") != std::string::npos ||
                      lb.find("maximum") != std::string::npos || lb.find("exceed") != std::string::npos)) {
