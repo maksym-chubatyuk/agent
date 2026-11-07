@@ -227,6 +227,13 @@ public:
         if (cfg.max_tokens > 0) body.set("max_tokens", cfg.max_tokens);
         if (cfg.temperature >= 0) body.set("temperature", cfg.temperature);
         if (cfg.top_p >= 0) body.set("top_p", cfg.top_p);
+        if (!cfg.reasoning_effort.empty()) {
+            // a plain number goes out as a number, anything else as the string given
+            const std::string& e = cfg.reasoning_effort;
+            bool num = e.find_first_not_of("0123456789") == std::string::npos;
+            if (num) body.set("reasoning_effort", (long long)atoll(e.c_str()));
+            else body.set("reasoning_effort", e);
+        }
         if (cfg.stream_usage) {
             Json so = Json::object();
             so.set("include_usage", true);

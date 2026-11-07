@@ -25,6 +25,7 @@ struct Config {
     long max_tokens = 0;              // 0 = don't send
     double temperature = -1;          // <0 = don't send
     double top_p = -1;                // <0 = don't send
+    std::string reasoning_effort;     // empty = don't send
     int max_retries = 6;
     int connect_timeout_s = 10;
     int idle_timeout_s = 600;         // max silence on an open LLM connection
